@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Gira la Ruleta</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+ 
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #e8e8e8;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    gap: 28px;
+  }
+ 
+  h1 {
+    font-size: 2.4rem;
+    font-weight: 900;
+    color: #111;
+    letter-spacing: -1px;
+  }
+ 
+  .wheel-container {
+    position: relative;
+    width: 360px;
+    height: 360px;
+  }
+ 
+  .arrow {
+    position: absolute;
+    top: -20px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0; height: 0;
+    border-left: 16px solid transparent;
+    border-right: 16px solid transparent;
+    border-top: 34px solid #888;
+    z-index: 20;
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.25));
+  }
+ 
+  canvas {
+    border-radius: 50%;
+    box-shadow: 0 0 0 10px #fff, 0 10px 50px rgba(0,0,0,0.2);
+    display: block;
+  }
+ 
+  .spin-btn {
+    padding: 16px 56px;
+    border: none;
+    border-radius: 999px;
+    background: #666;
+    color: white;
+    font-size: 1.35rem;
+    font-weight: 900;
+    cursor: pointer;
+    letter-spacing: 2px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+    transition: transform 0.15s, box-shadow 0.15s;
+  }
+  .spin-btn:hover   { transform: translateY(-2px); box-shadow: 0 8px 28px rgba(0,0,0,0.3); }
+  .spin-btn:active  { transform: translateY(1px); }
+  .spin-btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+ 
+  .modal {
+    position: fixed; inset: 0;
+    display: none;
+    justify-content: center; align-items: center;
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(4px);
+    z-index: 100;
+  }
+  .modal-box {
+    background: #fff;
+    padding: 36px 32px;
+    border-radius: 24px;
+    text-align: center;
+    max-width: 300px;
+    box-shadow: 0 24px 60px rgba(0,0,0,0.35);
+  }
+  .modal-box h2 { font-size: 1.7rem; margin-bottom: 10px; color: #111; }
+  .modal-box p  { color: #666; font-size: 1rem; margin-bottom: 22px; }
+  .modal-box button {
+    padding: 12px 38px; border: none; border-radius: 999px;
+    background: #666; color: white;
+    font-size: 1rem; font-weight: 800; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+ 
+<h1>¡Gira la ruleta!</h1>
+ 
+<div class="wheel-container">
+  <div class="arrow"></div>
+  <canvas id="canvas" width="360" height="360"></canvas>
+</div>
+ 
+<button class="spin-btn" id="btn" onclick="girar()">¡GIRAR!</button>
+ 
+<div id="modal" class="modal">
+  <div class="modal-box">
+    <h2 id="modal-title">🎉 ¡Ganaste!</h2>
+    <p  id="modal-msg">¡Te ganaste un iPhone!</p>
+    <button onclick="cerrar()">Cerrar</button>
+  </div>
+</div>
+ 
+<script>
+const canvas = document.getElementById('canvas');
+const ctx    = canvas.getContext('2d');
+const W = canvas.width;
+const CX = W/2, CY = W/2, R = W/2 - 2;
+ 
+// ── Sectores ──────────────────────────────────────────────────────────────────
+// Ángulo 0 = derecha (eje X). Convenio estándar canvas.
+// Flecha apunta ARRIBA = -π/2.
+// Sector 0 "iPhone":    -90° →  30°  (arriba-derecha), 120° de arco
+// Sector 1 "Nada":       30° → 150°  (abajo)          120° de arco
+// Sector 2 "Inténtalo": 150° → 270°  (izquierda)      120° de arco
+ 
+const D = Math.PI / 180;
+ 
+const sectors = [
+  {
+    label: ['¡UN', 'IPHONE!'],
+    color: '#a8bbd4',
+    start: -90 * D,
+    end:    30 * D,
+    hasImage: true
+  },
+  {
+    label: ['¡Vaya! No has', 'ganado nada'],
+    color: '#9db0c5',
+    start:  30 * D,
+    end:   150 * D,
+    hasImage: false
+  },
+  {
+    label: ['¡Inténtalo', 'otra vez!'],
+    color: '#e8a825',
+    start: 150 * D,
+    end:   270 * D,
+    hasImage: false
+  }
+];
+ 
+let currentAngle = 0;
+let spinning = false;
+let iphoneImg = null;
+ 
+// ── Cargar imagen del iPhone ──────────────────────────────────────────────────
+const img = new Image();
+img.onload  = () => { iphoneImg = img; drawWheel(currentAngle); };
+img.onerror = () => drawWheel(currentAngle);
+img.src = '/uploads/Gemini_Generated_Image_qaohffqaohffqaoh.png';
+ 
+// ── Texto multilínea centrado en un sector ───────────────────────────────────
+// Dibuja el texto en el punto (distFromCenter, 0) relativo al centro de la rueda,
+// orientado a lo largo del radio medio del sector.
+function drawSectorText(lines, midAngle, distFromCenter, fontSize, color) {
+  ctx.save();
+  ctx.rotate(midAngle);
+  ctx.translate(distFromCenter, 0);
+  // Rotar el texto 90° para que quede "parado" dentro del sector
+  ctx.rotate(Math.PI / 2);
+  ctx.font      = `bold ${fontSize}px 'Segoe UI', sans-serif`;
+  ctx.fillStyle = color;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const lh = fontSize * 1.35;
+  const totalH = (lines.length - 1) * lh;
+  lines.forEach((line, i) => {
+    ctx.fillText(line, 0, -totalH / 2 + i * lh);
+  });
+  ctx.restore();
+}
+ 
+// ── Rectángulo redondeado ─────────────────────────────────────────────────────
+function roundRect(cx, cy, w, h, r) {
+  const x = cx - w/2, y = cy - h/2;
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.arcTo(x + w, y, x + w, y + r, r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+  ctx.lineTo(x + r, y + h);
+  ctx.arcTo(x, y + h, x, y + h - r, r);
+  ctx.lineTo(x, y + r);
+  ctx.arcTo(x, y, x + r, y, r);
+  ctx.closePath();
+}
+ 
+// ── Dibujar toda la rueda ─────────────────────────────────────────────────────
+function drawWheel(angleDeg) {
+  ctx.clearRect(0, 0, W, W);
+  ctx.save();
+  ctx.translate(CX, CY);
+  ctx.rotate(angleDeg * D);
+ 
+  // Clip circular
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(0, 0, R, 0, Math.PI * 2);
+  ctx.clip();
+ 
+  // ── 1. Sectores de color ───────────────────────────────────────────────────
+  sectors.forEach(s => {
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.arc(0, 0, R, s.start, s.end);
+    ctx.closePath();
+    ctx.fillStyle = s.color;
+    ctx.fill();
+  });
+ 
+  // ── 2. Líneas divisorias ───────────────────────────────────────────────────
+  sectors.forEach(s => {
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(Math.cos(s.start) * R, Math.sin(s.start) * R);
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+  });
+ 
+  // ── 3. Contenido de cada sector ────────────────────────────────────────────
+  sectors.forEach(s => {
+    const mid = (s.start + s.end) / 2;
+ 
+    if (s.hasImage) {
+      // ── Recuadro blanco con iPhone ────────────────────────────────────────
+      const boxDist = R * 0.40; // distancia del centro al centro del recuadro
+      const bx = Math.cos(mid) * boxDist;
+      const by = Math.sin(mid) * boxDist;
+      const bW = 80, bH = 100, bR = 12;
+ 
+      ctx.save();
+      ctx.translate(bx, by);
+      // El recuadro se orienta hacia el centro del sector
+      ctx.rotate(mid + Math.PI / 2);
+ 
+      // Sombra + fondo blanco
+      ctx.shadowColor = 'rgba(0,0,0,0.18)';
+      ctx.shadowBlur  = 10;
+      roundRect(0, 0, bW, bH, bR);
+      ctx.fillStyle = 'rgba(255,255,255,0.95)';
+      ctx.fill();
+      ctx.shadowBlur = 0;
+ 
+      // Imagen dentro del recuadro
+      if (iphoneImg) {
+        ctx.save();
+        roundRect(0, 0, bW - 8, bH - 8, bR - 4);
+        ctx.clip();
+        ctx.drawImage(iphoneImg, -bW/2 + 4, -bH/2 + 4, bW - 8, bH - 8);
+        ctx.restore();
+      } else {
+        // Placeholder si no carga la imagen
+        ctx.fillStyle = '#dde';
+        roundRect(0, 0, bW - 8, bH - 8, bR - 4);
+        ctx.fill();
+        ctx.fillStyle = '#888';
+        ctx.font = '28px serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('📱', 0, 0);
+      }
+ 
+      ctx.restore();
+ 
+      // Texto del sector iPhone (más cerca del borde)
+      drawSectorText(s.label, mid, R * 0.75, 15, '#1a1a1a');
+ 
+    } else {
+      // Texto centrado en el sector
+      drawSectorText(s.label, mid, R * 0.55, 13.5, '#1a1a1a');
+    }
+  });
+ 
+  ctx.restore(); // fin clip
+ 
+  // ── 4. Círculo central ─────────────────────────────────────────────────────
+  ctx.beginPath();
+  ctx.arc(0, 0, 14, 0, Math.PI * 2);
+  ctx.fillStyle = '#fff';
+  ctx.shadowColor = 'rgba(0,0,0,0.2)';
+  ctx.shadowBlur  = 6;
+  ctx.fill();
+  ctx.shadowBlur = 0;
+ 
+  ctx.restore();
+}
+ 
+// ── Easing ────────────────────────────────────────────────────────────────────
+function easeOut(t) { return 1 - Math.pow(1 - t, 4); }
+ 
+// ── Girar ─────────────────────────────────────────────────────────────────────
+function girar() {
+  if (spinning) return;
+  spinning = true;
+  document.getElementById('btn').disabled = true;
+ 
+  // Queremos que la flecha (arriba = -90°) apunte al centro del sector iPhone.
+  // Centro del sector iPhone = (-90 + 30) / 2 = -30° (en ángulos de canvas sin rotación).
+  // Para que ese punto quede en -90° tras la rotación de la rueda:
+  //   -30 + rotación = -90  →  rotación = -60° ≡ 300°
+  // Sumamos vueltas completas para la animación.
+ 
+  const vueltas = 5;
+  const normalised = ((currentAngle % 360) + 360) % 360; // 0–360
+  const target = 300;
+  let delta = target - normalised;
+  if (delta <= 0) delta += 360;
+  const totalDelta = vueltas * 360 + delta;
+ 
+  const duration = 4200;
+  const startAngle = currentAngle;
+  const startTime  = performance.now();
+ 
+  function animate(now) {
+    const t = Math.min((now - startTime) / duration, 1);
+    currentAngle = startAngle + totalDelta * easeOut(t);
+    drawWheel(currentAngle);
+    if (t < 1) {
+      requestAnimationFrame(animate);
+    } else {
+      spinning = false;
+      setTimeout(() => {
+        document.getElementById('modal-title').textContent = '🎉 ¡Ganaste!';
+        document.getElementById('modal-msg').textContent   = '¡Te ganaste un iPhone!';
+        document.getElementById('modal').style.display     = 'flex';
+        document.getElementById('btn').disabled = false;
+      }, 400);
+    }
+  }
+  requestAnimationFrame(animate);
+}
+ 
+function cerrar() {
+  document.getElementById('modal').style.display = 'none';
+}
+ 
+// ── Inicio ────────────────────────────────────────────────────────────────────
+drawWheel(0);
+</script>
+</body>
+</html>
